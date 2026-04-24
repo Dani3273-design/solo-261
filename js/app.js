@@ -3,15 +3,19 @@
     // 全局变量
     let scene, camera, renderer;
     let conveyorBelt, beltLinks = [], manipulators = [], part;
-    let ceilingBridge; // 整体吊顶桥架
-    let partState = 'MOVING_TO_FIRST'; // 零件状态
+    let ceilingBridge;
+    let partState = 'MOVING_TO_FIRST';
     let partPosition = { x: -12, y: 0.6, z: 0 };
     let currentManipulator = 0;
     let animationTime = 0;
     let hasEars = false, hasSmile = false, hasBody = false;
     
     // 统一的移动速度
-    const MOVE_SPEED = 1.5; // 单位/秒
+    const MOVE_SPEED = 1.5;
+    
+    // 物理参数
+    const GRIPPER_MIN_Y = 1.8; // 抓爪最低高度
+    const TROLLEY_BOTTOM_Y = 9.5; // 小车底部Y坐标
     
     // 零件组件
     let partBase, partLeftEar, partRightEar, partSmile, partBody;
@@ -24,43 +28,29 @@
     animate();
     
     function init() {
-        // 创建场景
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0xffffff);
         
-        // 创建相机
         camera = new THREE.PerspectiveCamera(45, 800 / 600, 0.1, 1000);
         camera.position.set(0, 15, 20);
         camera.lookAt(0, 0, 0);
         
-        // 创建渲染器
         renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(800, 600);
         renderer.shadowMap.enabled = true;
         document.getElementById('container').appendChild(renderer.domElement);
         
-        // 添加灯光
         addLights();
-        
-        // 创建整体吊顶桥架（连在一起，不是分开3块）
         createCeilingBridge();
-        
-        // 创建传送带（带连续链条节，完全覆盖）
         createConveyorBeltWithLinks();
-        
-        // 创建3个机械手（挂在整体桥架上）
         createCraneManipulators();
-        
-        // 创建三角形零件
         createPart();
     }
     
     function addLights() {
-        // 环境光
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         scene.add(ambientLight);
         
-        // 方向光（主光源）
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
         directionalLight.position.set(10, 20, 10);
         directionalLight.castShadow = true;
@@ -68,56 +58,45 @@
         directionalLight.shadow.mapSize.height = 2048;
         scene.add(directionalLight);
         
-        // 点光源
         const pointLight = new THREE.PointLight(0xffffff, 0.5);
         pointLight.position.set(0, 10, 5);
         scene.add(pointLight);
     }
     
     function createCeilingBridge() {
-        // 创建整体吊顶桥架（连在一起，不是分开3块）
-        const bridgeGeometry = new THREE.BoxGeometry(25, 0.8, 8); // 长25，覆盖3个机械手位置
+        // 整体吊顶桥架 - 连在一起
+        const bridgeGeometry = new THREE.BoxGeometry(25, 0.8, 8);
         const bridgeMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0x2c3e50, // 深灰蓝色
+            color: 0x2c3e50,
             shininess: 100
         });
         
         ceilingBridge = new THREE.Mesh(bridgeGeometry, bridgeMaterial);
-        ceilingBridge.position.set(0, 11, 0); // 高度11
+        ceilingBridge.position.set(0, 11, 0);
         ceilingBridge.castShadow = true;
         ceilingBridge.receiveShadow = true;
         scene.add(ceilingBridge);
         
-        // 添加桥架支撑柱（左右两侧）
+        // 支撑柱
         const pillarGeometry = new THREE.BoxGeometry(0.8, 5, 0.8);
         const pillarMaterial = new THREE.MeshPhongMaterial({ 
             color: 0x34495e,
             shininess: 80
         });
         
-        // 左前柱
-        const pillar1 = new THREE.Mesh(pillarGeometry, pillarMaterial);
-        pillar1.position.set(-12, 8, -3.5);
-        pillar1.castShadow = true;
-        scene.add(pillar1);
+        const pillarPositions = [
+            { x: -12, z: -3.5 },
+            { x: -12, z: 3.5 },
+            { x: 12, z: -3.5 },
+            { x: 12, z: 3.5 }
+        ];
         
-        // 左后柱
-        const pillar2 = new THREE.Mesh(pillarGeometry, pillarMaterial);
-        pillar2.position.set(-12, 8, 3.5);
-        pillar2.castShadow = true;
-        scene.add(pillar2);
-        
-        // 右前柱
-        const pillar3 = new THREE.Mesh(pillarGeometry, pillarMaterial);
-        pillar3.position.set(12, 8, -3.5);
-        pillar3.castShadow = true;
-        scene.add(pillar3);
-        
-        // 右后柱
-        const pillar4 = new THREE.Mesh(pillarGeometry, pillarMaterial);
-        pillar4.position.set(12, 8, 3.5);
-        pillar4.castShadow = true;
-        scene.add(pillar4);
+        pillarPositions.forEach(pos => {
+            const pillar = new THREE.Mesh(pillarGeometry, pillarMaterial);
+            pillar.position.set(pos.x, 8, pos.z);
+            pillar.castShadow = true;
+            scene.add(pillar);
+        });
     }
     
     function createConveyorBeltWithLinks() {
@@ -132,12 +111,13 @@
         beltFrame.receiveShadow = true;
         scene.add(beltFrame);
         
-        // 创建链条节 - 间隙加大2倍（从0.02改为0.4）
-        const linkWidth = 0.8;
-        const linkHeight = 0.15;
-        const linkDepth = 0.5; // 单个链条节的深度
-        const gap = 0.4; // 间隙加大到0.4（是之前0.02的20倍，或者理解为合理的间隙）
-        const totalLinks = 50;
+        // 链条节 - 关键修复：垂直于运动方向（Z轴）连在一起，无间隙
+        // 每根链条节覆盖整个传送带宽度（Z轴方向）
+        const linkWidth = 0.8; // X轴方向（运动方向）
+        const linkHeight = 0.15; // Y轴方向
+        const linkDepth = 6.0; // Z轴方向 - 覆盖整个宽度，垂直方向连在一起
+        const gap = 0.02; // X轴方向间隙很小
+        const totalLinks = 60;
         
         const linkGeometry = new THREE.BoxGeometry(linkWidth, linkHeight, linkDepth);
         const linkMaterial = new THREE.MeshPhongMaterial({ 
@@ -145,32 +125,19 @@
             shininess: 80
         });
         
-        // 创建多排链条节，完全覆盖传送带宽度
-        // 传送带宽度是7，我们用多排链条节覆盖
-        const rows = 5; // 5排链条节
-        const rowSpacing = 1.2; // 每排之间的间距
-        
-        for (let row = 0; row < rows; row++) {
-            const zPos = -2.4 + row * rowSpacing;
+        // 只需要一排，因为每根链条节已经覆盖整个Z轴宽度
+        for (let i = 0; i < totalLinks; i++) {
+            const link = new THREE.Mesh(linkGeometry, linkMaterial);
+            const startX = -25 + i * (linkWidth + gap);
+            link.position.set(startX, 0.03, 0); // 向下移动避免穿透
+            link.castShadow = true;
+            link.receiveShadow = true;
+            scene.add(link);
             
-            for (let i = 0; i < totalLinks; i++) {
-                const link = new THREE.Mesh(linkGeometry, linkMaterial);
-                // 初始位置
-                const startX = -20 + i * (linkWidth + gap);
-                link.position.set(startX, 0.08, zPos);
-                link.castShadow = true;
-                link.receiveShadow = true;
-                scene.add(link);
-                
-                beltLinks.push({
-                    mesh: link,
-                    startX: startX,
-                    row: row
-                });
-            }
+            beltLinks.push({ mesh: link, startX: startX });
         }
         
-        // 传送带中间的连接板（模拟皮带表面）
+        // 传送带中间的连接板
         const surfaceGeometry = new THREE.BoxGeometry(30, 0.05, 6);
         const surfaceMaterial = new THREE.MeshPhongMaterial({ 
             color: 0x333333,
@@ -204,12 +171,11 @@
     }
     
     function createCraneManipulators() {
-        // 机械手位置 - 在整体桥架下方，传送带正上方
         const manipulatorXPositions = [-6, 0, 6];
         
         manipulatorXPositions.forEach((posX, index) => {
-            const manipulator = createCraneManipulator(index, posX);
-            manipulator.position.set(posX, 0, 0); // 在传送带正上方
+            const manipulator = createSingleManipulator();
+            manipulator.position.set(posX, 0, 0);
             manipulators.push(manipulator);
             scene.add(manipulator);
             
@@ -219,45 +185,42 @@
                 cable: manipulator.children[1],
                 gripper: manipulator.children[2],
                 isProcessing: false,
-                processTime: 0,
-                originalX: posX
+                processTime: 0
             });
         });
     }
     
-    function createCraneManipulator(index, posX) {
+    function createSingleManipulator() {
         const manipulator = new THREE.Group();
         
-        // 颜色方案
-        const trolleyColor = 0xe74c3c;   // 红色（移动小车）
-        const cableColor = 0x95a5a6;     // 灰色（钢缆）- 单条
-        const gripperColor = 0xf39c12;   // 橙黄色（抓爪）
+        const trolleyColor = 0xe74c3c;
+        const cableColor = 0x95a5a6;
+        const gripperColor = 0xf39c12;
         
-        // 1. 移动小车（在整体桥架下方移动）
+        // 1. 移动小车
         const trolleyGeometry = new THREE.BoxGeometry(2, 1, 3);
         const trolleyMaterial = new THREE.MeshPhongMaterial({ 
             color: trolleyColor,
             shininess: 80
         });
         const trolley = new THREE.Mesh(trolleyGeometry, trolleyMaterial);
-        trolley.position.set(0, 10, 0); // 挂在桥架下方（桥架在y=11）
+        trolley.position.set(0, 10, 0); // 中心Y=10，底部Y=9.5
         trolley.castShadow = true;
         trolley.receiveShadow = true;
         manipulator.add(trolley);
         
-        // 2. 单条钢缆（不是4条）
-        // 粗一点的钢缆
-        const cableGeometry = new THREE.CylinderGeometry(0.12, 0.12, 5, 12);
+        // 2. 单条钢缆
+        const cableGeometry = new THREE.CylinderGeometry(0.12, 0.12, 1, 12);
         const cableMaterial = new THREE.MeshPhongMaterial({ 
             color: cableColor,
             shininess: 100
         });
         const cable = new THREE.Mesh(cableGeometry, cableMaterial);
-        cable.position.set(0, 7, 0); // 从小车底部(y=9.5)到初始抓爪位置(y=4.5)
+        cable.position.set(0, 7.1, 0); // 初始位置，会动态更新
         cable.castShadow = true;
         manipulator.add(cable);
         
-        // 3. 抓爪组件（左右钳子，不是3个爪子）
+        // 3. 抓爪组件
         const gripperGroup = new THREE.Group();
         
         // 抓爪连接座
@@ -270,66 +233,36 @@
         gripperBase.position.y = 0;
         gripperGroup.add(gripperBase);
         
-        // 中心柱
-        const centerPoleGeometry = new THREE.CylinderGeometry(0.1, 0.1, 1.5, 8);
-        const centerPole = new THREE.Mesh(centerPoleGeometry, cableMaterial);
-        centerPole.position.y = -0.95;
-        centerPole.castShadow = true;
-        gripperGroup.add(centerPole);
-        
-        // 旋转关节（让钳子可以开合）
-        const jointGeometry = new THREE.SphereGeometry(0.15, 16, 16);
-        const jointMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0x2c3e50,
-            shininess: 100
-        });
-        
-        // 左关节
-        const leftJoint = new THREE.Mesh(jointGeometry, jointMaterial);
-        leftJoint.position.set(-0.35, -0.2, 0);
-        leftJoint.castShadow = true;
-        gripperGroup.add(leftJoint);
-        
-        // 右关节
-        const rightJoint = new THREE.Mesh(jointGeometry, jointMaterial);
-        rightJoint.position.set(0.35, -0.2, 0);
-        rightJoint.castShadow = true;
-        gripperGroup.add(rightJoint);
-        
-        // 左钳子
-        const clawGeometry = new THREE.BoxGeometry(0.15, 1.8, 0.6);
+        // 左右钳子 - 关键修复：物理合理的张开和合拢
+        const clawGeometry = new THREE.BoxGeometry(0.15, 1.4, 0.6);
         const clawMaterial = new THREE.MeshPhongMaterial({ 
             color: gripperColor,
             shininess: 80
         });
         
-        // 左钳子
+        // 左钳子 - 初始张开状态（要抓住先张大）
         const leftClaw = new THREE.Mesh(clawGeometry, clawMaterial);
-        // 初始位置：钳子是张开的（物理合理：要抓住零件需要先张大）
-        leftClaw.position.set(-0.7, -1.2, 0);
-        // 钳子向外张开一定角度
-        leftClaw.rotation.z = 0.3; // 向外倾斜
+        leftClaw.position.set(-0.9, -0.9, 0); // Y=-0.9：钳子顶部在Y=-0.9+0.7=-0.2，刚好连接到连接座底部
+        leftClaw.rotation.z = 0.35; // 向外倾斜
         leftClaw.castShadow = true;
         leftClaw.userData = {
-            originalX: -0.7,
-            originalRotationZ: 0.3,
-            closedX: -0.25,
-            closedRotationZ: -0.1
+            originalX: -0.9,
+            originalRotationZ: 0.35,
+            closedX: -0.87, // 合拢位置：零件左边缘在-0.8，钳子宽度0.15，中心在-0.87时右边缘=-0.87+0.075=-0.795，刚好接触零件
+            closedRotationZ: 0.05
         };
         gripperGroup.add(leftClaw);
         
-        // 右钳子
+        // 右钳子 - 初始张开状态
         const rightClaw = new THREE.Mesh(clawGeometry, clawMaterial);
-        // 初始位置：钳子是张开的
-        rightClaw.position.set(0.7, -1.2, 0);
-        // 钳子向外张开一定角度
-        rightClaw.rotation.z = -0.3; // 向外倾斜
+        rightClaw.position.set(0.9, -0.9, 0); // Y=-0.9：钳子顶部在Y=-0.9+0.7=-0.2，刚好连接到连接座底部
+        rightClaw.rotation.z = -0.35; // 向外倾斜
         rightClaw.castShadow = true;
         rightClaw.userData = {
-            originalX: 0.7,
-            originalRotationZ: -0.3,
-            closedX: 0.25,
-            closedRotationZ: 0.1
+            originalX: 0.9,
+            originalRotationZ: -0.35,
+            closedX: 0.87, // 合拢位置：零件右边缘在0.8，钳子宽度0.15，中心在0.87时左边缘=0.87-0.075=0.795，刚好接触零件
+            closedRotationZ: -0.05
         };
         gripperGroup.add(rightClaw);
         
@@ -371,16 +304,15 @@
         partBase.receiveShadow = true;
         part.add(partBase);
         
-        // 耳朵（初始隐藏）
+        // 耳朵
         createEars();
         
-        // 笑脸（初始隐藏）
+        // 笑脸
         createSmile();
         
-        // 身体（初始隐藏，正方形，横向平行传送带）
+        // 正方形身体
         createSquareBody();
         
-        // 设置初始位置
         part.position.set(partPosition.x, partPosition.y, partPosition.z);
         scene.add(part);
     }
@@ -392,14 +324,12 @@
             shininess: 50
         });
         
-        // 左耳
         partLeftEar = new THREE.Mesh(earGeometry, earMaterial);
         partLeftEar.position.set(-0.6, 0.8, 0);
         partLeftEar.castShadow = true;
         part.add(partLeftEar);
         partLeftEar.visible = false;
         
-        // 右耳
         partRightEar = new THREE.Mesh(earGeometry, earMaterial);
         partRightEar.position.set(0.6, 0.8, 0);
         partRightEar.castShadow = true;
@@ -410,7 +340,6 @@
     function createSmile() {
         partSmile = new THREE.Group();
         
-        // 笑脸材质
         const smileMaterial = new THREE.MeshPhongMaterial({ 
             color: 0x333333,
             shininess: 100
@@ -431,7 +360,7 @@
         rightEye.castShadow = true;
         partSmile.add(rightEye);
         
-        // 嘴巴（圆弧）
+        // 嘴巴
         const mouthCurve = new THREE.CatmullRomCurve3([
             new THREE.Vector3(-0.3, -0.1, 0),
             new THREE.Vector3(-0.15, -0.25, 0),
@@ -456,19 +385,27 @@
     }
     
     function createSquareBody() {
-        // 正方形身体 - 横向平行传送带
-        // 传送带沿X轴方向，所以正方形的边应该平行于X轴和Y轴（平面）
-        // 我们需要创建一个扁平的正方形，横向（X轴方向）放置
+        // 正方形身体 - 关键修复：
+        // 1. 横向平行传送带
+        // 2. 与三角零件间隙为0
+        // 3. 在传送带之上
+        // 4. 足够大，可见
         
-        // 创建一个正方形，让它"横放"在传送带上
-        // 注意：三角形零件的底座是在X-Y平面（rotation.x = Math.PI/2）
-        // 所以正方形身体也应该在相同的平面
+        // 三角形零件分析：
+        // - 三角形在X-Y平面创建，然后 rotation.x = Math.PI/2
+        // - 旋转后，三角形在X-Z平面（水平）
+        // - 挤出深度（0.3）沿-Y轴方向（向下）
+        // - 零件中心Y=0.6
+        // - 所以三角形从Y=0.6（顶部）到Y=0.3（底部）
         
-        // 更大的正方形，确保可见
-        const bodySize = 2.0; // 边长
-        const bodyThickness = 0.25; // 厚度
+        // 正方形应该：
+        // - 同样在X-Z平面（rotation.x = Math.PI/2）
+        // - 顶部Y=0.3（接触三角形底部，间隙为0）
+        // - 底部Y=0.3 - 厚度（在链条节Y=0.03之上）
         
-        // 使用ExtrudeGeometry创建正方形，然后旋转到正确方向
+        const bodySize = 2.2; // 比三角形大，可见
+        const bodyThickness = 0.25;
+        
         const squareShape = new THREE.Shape();
         squareShape.moveTo(-bodySize/2, bodySize/2);
         squareShape.lineTo(bodySize/2, bodySize/2);
@@ -487,16 +424,29 @@
         
         const bodyGeometry = new THREE.ExtrudeGeometry(squareShape, extrudeSettings);
         const bodyMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0xcc8800, // 深一点的橙色，和三角形区分
+            color: 0xcc8800,
             shininess: 60
         });
         
         partBody = new THREE.Mesh(bodyGeometry, bodyMaterial);
-        // 旋转到和三角形零件相同的平面（X-Y平面）
-        partBody.rotation.x = Math.PI / 2;
-        // 位置调整：在三角形零件下方，确保可见
-        partBody.position.y = -1.0; // 向上移动，让它更可见
+        partBody.rotation.x = Math.PI / 2; // 与三角形同平面
+        
+        // 位置计算：
+        // 三角形挤出方向是Z轴，rotation.x = Math.PI/2后变成Y轴
+        // 三角形底部（本地Y=0）对应全局Y=0.6 + 0 = 0.6
+        // 三角形顶部（本地Y=0.3）对应全局Y=0.6 + 0.3 = 0.9
+        // 正方形需要顶部Y=0.6才能间隙为0
+        // 正方形挤出深度0.25，旋转后顶部在本地Y=0.25
+        // 所以：0.6 + partBody.position.y + 0.25 = 0.6
+        // partBody.position.y = -0.25
+        
+        // 验证：
+        // 正方形顶部Y = 0.6 + (-0.25) + 0.25 = 0.6（接触三角形底部，间隙为0）
+        // 正方形底部Y = 0.6 + (-0.25) + 0 = 0.35（在链条节Y=0.03之上，不穿透）
+        
+        partBody.position.y = -0.25; // 间隙为0，在链条节之上
         partBody.position.z = 0;
+        
         partBody.castShadow = true;
         partBody.receiveShadow = true;
         part.add(partBody);
@@ -505,39 +455,38 @@
     
     function animate() {
         requestAnimationFrame(animate);
-        animationTime += 0.016; // 约60fps
+        animationTime += 0.016;
         
         updateBeltLinks();
         updatePartAnimation();
         updateManipulators();
         
+        // 关键修复：为所有机械手更新钢缆
+        manipulatorComponents.forEach(comp => {
+            updateCable(comp.cable, comp.gripper.position.y);
+        });
+        
         renderer.render(scene, camera);
     }
     
     function updateBeltLinks() {
-        // 使用与零件相同的移动速度
         const deltaX = MOVE_SPEED * 0.016;
         
         beltLinks.forEach(linkData => {
-            // 计算新位置
             let newX = linkData.mesh.position.x + deltaX;
-            
-            // 循环：如果超出右端，重置到左端
             if (newX > 20) {
-                newX = -20;
+                newX = -25;
             }
-            
             linkData.mesh.position.x = newX;
         });
     }
     
     function updatePartAnimation() {
         const manipulatorPositions = [-6, 0, 6];
-        const deltaX = MOVE_SPEED * 0.016; // 每帧移动距离
+        const deltaX = MOVE_SPEED * 0.016;
         
         switch(partState) {
             case 'MOVING_TO_FIRST':
-                // 移动到第一个机械手
                 partPosition.x += deltaX;
                 if (partPosition.x >= manipulatorPositions[0]) {
                     partPosition.x = manipulatorPositions[0];
@@ -549,18 +498,11 @@
             case 'AT_FIRST':
             case 'AT_SECOND':
             case 'AT_THIRD':
-                // 零件在机械手位置，等待抓取
                 if (!manipulatorComponents[currentManipulator].isProcessing) {
                     manipulatorComponents[currentManipulator].isProcessing = true;
                     manipulatorComponents[currentManipulator].processTime = 0;
                     partState = 'BEING_LIFTED';
                 }
-                break;
-                
-            case 'BEING_LIFTED':
-            case 'BEING_PROCESSED':
-            case 'BEING_PLACED':
-                // 零件被机械手控制，不在这里更新位置
                 break;
                 
             case 'MOVING_TO_SECOND':
@@ -584,10 +526,8 @@
             case 'MOVING_TO_EXIT':
                 partPosition.x += deltaX;
                 if (partPosition.x > 15) {
-                    // 重置到起点，循环动画
                     partPosition.x = -12;
                     partState = 'MOVING_TO_FIRST';
-                    // 重置零件状态
                     hasEars = hasSmile = hasBody = false;
                     partLeftEar.visible = partRightEar.visible = false;
                     partSmile.visible = false;
@@ -596,7 +536,6 @@
                 break;
         }
         
-        // 更新零件位置（除非正在被抓取）
         if (partState !== 'BEING_LIFTED' && partState !== 'BEING_PROCESSED' && partState !== 'BEING_PLACED') {
             part.position.set(partPosition.x, partPosition.y, partPosition.z);
         }
@@ -607,39 +546,27 @@
             if (comp.isProcessing) {
                 comp.processTime += 0.016;
                 
-                // 抓娃娃机风格的动画流程：
-                // 1. 抓爪下降（钳子保持张开状态）
-                // 2. 钳子合拢（抓住零件）
-                // 3. 抓爪上升（带着零件）- 物理同步：零件和机械手一起上
-                // 4. 加工（轻微晃动）
-                // 5. 抓爪下降（带着零件）- 物理同步：一起下
-                // 6. 钳子张开（松开零件）
-                // 7. 抓爪上升回原位
-                
-                const lowerTime = 1.0;         // 下降时间
-                const closeTime = 0.5;         // 合拢时间
-                const liftTime = 0.8;          // 上升时间
-                const processTime = 1.5;       // 加工时间
-                const lowerAgainTime = 0.8;    // 再次下降时间
-                const openTime = 0.5;          // 张开时间
-                const returnTime = 0.8;        // 返回原位时间
+                const lowerTime = 1.0;
+                const closeTime = 0.5;
+                const liftTime = 0.8;
+                const processTime = 1.5;
+                const lowerAgainTime = 0.8;
+                const openTime = 0.5;
+                const returnTime = 0.8;
                 
                 const totalTime = lowerTime + closeTime + liftTime + processTime + 
                                   lowerAgainTime + openTime + returnTime;
                 
                 let elapsed = comp.processTime;
                 
-                // 1. 抓爪下降（钳子保持张开）
                 if (elapsed < lowerTime) {
                     const progress = elapsed / lowerTime;
-                    lowerGripper(comp, index, progress);
+                    lowerGripper(comp, progress);
                 }
-                // 2. 钳子合拢（抓住零件）
                 else if (elapsed < lowerTime + closeTime) {
                     const progress = (elapsed - lowerTime) / closeTime;
-                    closeClaws(comp, index, progress);
+                    closeClaws(comp, progress);
                 }
-                // 3. 抓爪上升（带着零件）- 物理同步
                 else if (elapsed < lowerTime + closeTime + liftTime) {
                     const progress = (elapsed - lowerTime - closeTime) / liftTime;
                     liftGripperWithPart(comp, index, progress);
@@ -647,7 +574,6 @@
                         partState = 'BEING_PROCESSED';
                     }
                 }
-                // 4. 加工
                 else if (elapsed < lowerTime + closeTime + liftTime + processTime) {
                     const progress = (elapsed - lowerTime - closeTime - liftTime) / processTime;
                     processPartWithGripper(comp, index, progress);
@@ -655,7 +581,6 @@
                         applyModification(index);
                     }
                 }
-                // 5. 抓爪下降（带着零件）- 物理同步
                 else if (elapsed < lowerTime + closeTime + liftTime + processTime + lowerAgainTime) {
                     const progress = (elapsed - lowerTime - closeTime - liftTime - processTime) / lowerAgainTime;
                     lowerGripperWithPart(comp, index, progress);
@@ -663,222 +588,165 @@
                         partState = 'BEING_PLACED';
                     }
                 }
-                // 6. 钳子张开（松开零件）
-                else if (elapsed < lowerTime + closeTime + liftTime + processTime + lowerAgainTime + openTime) {
+                else if (elapsed < totalTime - returnTime) {
                     const progress = (elapsed - lowerTime - closeTime - liftTime - processTime - lowerAgainTime) / openTime;
-                    openClaws(comp, index, progress);
+                    openClaws(comp, progress);
                 }
-                // 7. 抓爪上升回原位
                 else if (elapsed < totalTime) {
-                    const progress = (elapsed - lowerTime - closeTime - liftTime - processTime - lowerAgainTime - openTime) / returnTime;
-                    returnGripperToOriginal(comp, index, progress);
+                    const progress = (elapsed - (totalTime - returnTime)) / returnTime;
+                    returnGripperToOriginal(comp, progress);
                 }
-                // 完成
                 else {
                     comp.isProcessing = false;
-                    // 确保零件回到传送带
                     part.position.set(partPosition.x, partPosition.y, partPosition.z);
-                    // 更新状态
-                    if (index === 0) {
-                        partState = 'MOVING_TO_SECOND';
-                    } else if (index === 1) {
-                        partState = 'MOVING_TO_THIRD';
-                    } else {
-                        partState = 'MOVING_TO_EXIT';
-                    }
+                    if (index === 0) partState = 'MOVING_TO_SECOND';
+                    else if (index === 1) partState = 'MOVING_TO_THIRD';
+                    else partState = 'MOVING_TO_EXIT';
                 }
             }
         });
     }
     
-    function lowerGripper(comp, index, progress) {
+    function lowerGripper(comp, progress) {
         const gripper = comp.gripper;
-        const cable = comp.cable;
         const easeProgress = easeInOutQuad(progress);
         
-        // 从初始高度4.5下降到接近传送带的高度1.2
         const startY = 4.5;
-        const targetY = 1.2;
+        const targetY = GRIPPER_MIN_Y; // 最低高度，防止穿透
         
         gripper.position.y = startY + (targetY - startY) * easeProgress;
-        
-        // 同时更新钢缆
-        updateCable(cable, gripper.position.y);
-        
-        // 注意：钳子保持张开状态（不需要改变）
     }
     
-    function closeClaws(comp, index, progress) {
+    function closeClaws(comp, progress) {
         const gripper = comp.gripper;
         const easeProgress = easeInOutQuad(progress);
         
-        // 找到左右钳子
         // gripper.children[0] = 连接座
-        // gripper.children[1] = 中心柱
-        // gripper.children[2] = 左关节
-        // gripper.children[3] = 右关节
-        // gripper.children[4] = 左钳子
-        // gripper.children[5] = 右钳子
+        // gripper.children[1] = 左钳子
+        // gripper.children[2] = 右钳子
         
-        const leftClaw = gripper.children[4];
-        const rightClaw = gripper.children[5];
+        const leftClaw = gripper.children[1];
+        const rightClaw = gripper.children[2];
         
-        // 左钳子：从张开位置移动到合拢位置
-        const leftUserData = leftClaw.userData;
-        leftClaw.position.x = leftUserData.originalX + 
-                              (leftUserData.closedX - leftUserData.originalX) * easeProgress;
-        leftClaw.rotation.z = leftUserData.originalRotationZ + 
-                              (leftUserData.closedRotationZ - leftUserData.originalRotationZ) * easeProgress;
+        // 左钳子：从张开到合拢
+        const leftData = leftClaw.userData;
+        leftClaw.position.x = leftData.originalX + (leftData.closedX - leftData.originalX) * easeProgress;
+        leftClaw.rotation.z = leftData.originalRotationZ + (leftData.closedRotationZ - leftData.originalRotationZ) * easeProgress;
         
-        // 右钳子：从张开位置移动到合拢位置
-        const rightUserData = rightClaw.userData;
-        rightClaw.position.x = rightUserData.originalX + 
-                               (rightUserData.closedX - rightUserData.originalX) * easeProgress;
-        rightClaw.rotation.z = rightUserData.originalRotationZ + 
-                               (rightUserData.closedRotationZ - rightUserData.originalRotationZ) * easeProgress;
+        // 右钳子：从张开到合拢
+        const rightData = rightClaw.userData;
+        rightClaw.position.x = rightData.originalX + (rightData.closedX - rightData.originalX) * easeProgress;
+        rightClaw.rotation.z = rightData.originalRotationZ + (rightData.closedRotationZ - rightData.originalRotationZ) * easeProgress;
     }
     
     function liftGripperWithPart(comp, index, progress) {
         const gripper = comp.gripper;
-        const cable = comp.cable;
         const easeProgress = easeInOutQuad(progress);
         
-        // 从1.2上升到4.0
-        const startY = 1.2;
+        const startY = GRIPPER_MIN_Y;
         const targetY = 4.0;
         
         gripper.position.y = startY + (targetY - startY) * easeProgress;
         
-        // 更新钢缆
-        updateCable(cable, gripper.position.y);
-        
-        // 物理同步：零件跟随抓爪一起上升
-        // 零件位置 = 抓爪位置 - 偏移量
+        // 物理同步：零件跟随抓爪
+        const offset = 1.2; // 抓爪和零件之间的固定偏移
         const manipulatorWorldPos = new THREE.Vector3();
         manipulators[index].getWorldPosition(manipulatorWorldPos);
         
-        // 计算抓爪的世界Y坐标
-        const gripperWorldY = manipulatorWorldPos.y + gripper.position.y;
-        
-        // 零件应该在抓爪下方
-        // 抓爪底部大约在 gripper.position.y - 1.8（因为钳子长度是1.8）
-        // 零件顶部在 partPosition.y + 0.5（三角形高度约1，中心在0.6）
-        // 所以偏移量应该让零件刚好被钳子抓住
-        
         part.position.set(
             manipulatorWorldPos.x,
-            partPosition.y + (targetY - startY) * easeProgress, // 一起上升
+            (manipulatorWorldPos.y + gripper.position.y) - offset,
             partPosition.z
         );
     }
     
     function processPartWithGripper(comp, index, progress) {
         const gripper = comp.gripper;
-        const cable = comp.cable;
-        
-        // 轻微晃动模拟加工
         const shakeAmount = 0.05;
         const shake = Math.sin(progress * Math.PI * 8) * shakeAmount;
         
-        // 保持在4.0的高度，轻微晃动
         gripper.position.y = 4.0 + shake;
         
-        // 更新钢缆
-        updateCable(cable, gripper.position.y);
-        
-        // 物理同步：零件跟随晃动
+        // 物理同步
+        const offset = 1.2;
         const manipulatorWorldPos = new THREE.Vector3();
         manipulators[index].getWorldPosition(manipulatorWorldPos);
         
         part.position.set(
             manipulatorWorldPos.x,
-            partPosition.y + 2.8 + shake, // 保持上升后的高度 + 晃动
+            (manipulatorWorldPos.y + gripper.position.y) - offset + shake,
             partPosition.z
         );
     }
     
     function lowerGripperWithPart(comp, index, progress) {
         const gripper = comp.gripper;
-        const cable = comp.cable;
         const easeProgress = easeInOutQuad(progress);
         
-        // 从4.0下降到1.2
         const startY = 4.0;
-        const targetY = 1.2;
+        const targetY = GRIPPER_MIN_Y;
         
         gripper.position.y = startY + (targetY - startY) * easeProgress;
         
-        // 更新钢缆
-        updateCable(cable, gripper.position.y);
-        
-        // 物理同步：零件跟随抓爪一起下降
+        // 物理同步
+        const offset = 1.2;
         const manipulatorWorldPos = new THREE.Vector3();
         manipulators[index].getWorldPosition(manipulatorWorldPos);
         
         part.position.set(
             manipulatorWorldPos.x,
-            partPosition.y + 2.8 * (1 - easeProgress), // 一起下降
+            (manipulatorWorldPos.y + gripper.position.y) - offset,
             partPosition.z
         );
     }
     
-    function openClaws(comp, index, progress) {
+    function openClaws(comp, progress) {
         const gripper = comp.gripper;
         const easeProgress = easeInOutQuad(progress);
         
-        // 找到左右钳子
-        const leftClaw = gripper.children[4];
-        const rightClaw = gripper.children[5];
+        const leftClaw = gripper.children[1];
+        const rightClaw = gripper.children[2];
         
-        // 左钳子：从合拢位置回到张开位置
-        const leftUserData = leftClaw.userData;
-        leftClaw.position.x = leftUserData.closedX + 
-                              (leftUserData.originalX - leftUserData.closedX) * easeProgress;
-        leftClaw.rotation.z = leftUserData.closedRotationZ + 
-                              (leftUserData.originalRotationZ - leftUserData.closedRotationZ) * easeProgress;
+        // 左钳子：从合拢到张开
+        const leftData = leftClaw.userData;
+        leftClaw.position.x = leftData.closedX + (leftData.originalX - leftData.closedX) * easeProgress;
+        leftClaw.rotation.z = leftData.closedRotationZ + (leftData.originalRotationZ - leftData.closedRotationZ) * easeProgress;
         
-        // 右钳子：从合拢位置回到张开位置
-        const rightUserData = rightClaw.userData;
-        rightClaw.position.x = rightUserData.closedX + 
-                               (rightUserData.originalX - rightUserData.closedX) * easeProgress;
-        rightClaw.rotation.z = rightUserData.closedRotationZ + 
-                               (rightUserData.originalRotationZ - rightUserData.closedRotationZ) * easeProgress;
+        // 右钳子：从合拢到张开
+        const rightData = rightClaw.userData;
+        rightClaw.position.x = rightData.closedX + (rightData.originalX - rightData.closedX) * easeProgress;
+        rightClaw.rotation.z = rightData.closedRotationZ + (rightData.originalRotationZ - rightData.closedRotationZ) * easeProgress;
     }
     
-    function returnGripperToOriginal(comp, index, progress) {
+    function returnGripperToOriginal(comp, progress) {
         const gripper = comp.gripper;
-        const cable = comp.cable;
         const easeProgress = easeInOutQuad(progress);
         
-        // 从1.2上升回到初始高度4.5
-        const startY = 1.2;
+        const startY = GRIPPER_MIN_Y;
         const targetY = 4.5;
         
         gripper.position.y = startY + (targetY - startY) * easeProgress;
-        
-        // 更新钢缆
-        updateCable(cable, gripper.position.y);
     }
     
     function updateCable(cable, gripperY) {
-        // 小车底部在Y=9.5
-        const trolleyBottomY = 9.5;
+        // 关键修复：钢缆不要穿到机械手里面
+        // 小车底部在 Y=9.5
+        // 抓爪顶部在 Y=gripperY + 0.2（连接座高度的一半）
         
-        // 计算钢缆长度
-        // 钢缆连接小车底部和抓爪顶部
-        // 抓爪顶部大约在 gripperY + 0.2（连接座高度的一半）
-        const cableLength = trolleyBottomY - (gripperY + 0.2);
+        const gripperTopY = gripperY + 0.2;
+        const cableLength = TROLLEY_BOTTOM_Y - gripperTopY;
         
-        // 更新钢缆的缩放和位置
-        // 原始钢缆长度是5
-        cable.scale.y = cableLength / 5;
+        if (cableLength < 0.1) return;
+        
+        // 更新钢缆缩放和位置
+        // 原始钢缆长度是1
+        cable.scale.y = cableLength;
         
         // 钢缆中心在小车底部和抓爪顶部中间
-        const centerY = (trolleyBottomY + (gripperY + 0.2)) / 2;
+        const centerY = (TROLLEY_BOTTOM_Y + gripperTopY) / 2;
         cable.position.y = centerY;
     }
     
-    // 缓动函数
     function easeInOutQuad(t) {
         return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
     }
@@ -886,24 +754,19 @@
     function applyModification(manipulatorIndex) {
         switch(manipulatorIndex) {
             case 0:
-                // 第一个机械手：添加耳朵
                 if (!hasEars) {
                     hasEars = true;
                     partLeftEar.visible = true;
                     partRightEar.visible = true;
                 }
                 break;
-                
             case 1:
-                // 第二个机械手：刻笑脸
                 if (!hasSmile) {
                     hasSmile = true;
                     partSmile.visible = true;
                 }
                 break;
-                
             case 2:
-                // 第三个机械手：添加正方形身体
                 if (!hasBody) {
                     hasBody = true;
                     partBody.visible = true;
