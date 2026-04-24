@@ -2,7 +2,7 @@
 (function() {
     // 全局变量
     let scene, camera, renderer;
-    let conveyorBelt, manipulators = [], part;
+    let conveyorBelt, beltLinks = [], manipulators = [], part;
     let partState = 'MOVING_TO_FIRST'; // 零件状态
     let partPosition = { x: -12, y: 0.6, z: 0 };
     let currentManipulator = 0;
@@ -38,8 +38,8 @@
         // 添加灯光
         addLights();
         
-        // 创建传送带
-        createConveyorBelt();
+        // 创建传送带（带链条节）
+        createConveyorBeltWithLinks();
         
         // 创建3个机械手
         createManipulators();
@@ -67,32 +67,78 @@
         scene.add(pointLight);
     }
     
-    function createConveyorBelt() {
-        // 传送带主体（深色）
-        const beltGeometry = new THREE.BoxGeometry(30, 0.5, 6);
-        const beltMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0x333333,
+    function createConveyorBeltWithLinks() {
+        // 传送带底座框架
+        const frameGeometry = new THREE.BoxGeometry(32, 0.3, 7);
+        const frameMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x222222,
             shininess: 100
         });
-        conveyorBelt = new THREE.Mesh(beltGeometry, beltMaterial);
-        conveyorBelt.position.y = -0.25;
+        const beltFrame = new THREE.Mesh(frameGeometry, frameMaterial);
+        beltFrame.position.y = -0.6;
+        beltFrame.receiveShadow = true;
+        scene.add(beltFrame);
+        
+        // 创建链条节
+        const linkWidth = 0.8;
+        const linkHeight = 0.15;
+        const linkDepth = 1.2;
+        const gap = 0.2;
+        const totalLinks = 40;
+        
+        const linkGeometry = new THREE.BoxGeometry(linkWidth, linkHeight, linkDepth);
+        const linkMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x444444,
+            shininess: 80
+        });
+        
+        // 创建侧边链条
+        for (let side = -1; side <= 1; side += 2) {
+            for (let i = 0; i < totalLinks; i++) {
+                const link = new THREE.Mesh(linkGeometry, linkMaterial);
+                // 初始位置
+                const startX = -15 + i * (linkWidth + gap);
+                link.position.set(startX, 0.08, side * 2.2);
+                link.castShadow = true;
+                link.receiveShadow = true;
+                scene.add(link);
+                
+                beltLinks.push({
+                    mesh: link,
+                    startX: startX,
+                    speed: 2.5,
+                    offset: i * (linkWidth + gap)
+                });
+            }
+        }
+        
+        // 传送带中间的连接板（模拟皮带表面）
+        const surfaceGeometry = new THREE.BoxGeometry(30, 0.05, 2.5);
+        const surfaceMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x333333,
+            shininess: 50
+        });
+        conveyorBelt = new THREE.Mesh(surfaceGeometry, surfaceMaterial);
+        conveyorBelt.position.y = 0;
         conveyorBelt.receiveShadow = true;
         scene.add(conveyorBelt);
         
         // 传送带支架
-        const supportGeometry = new THREE.BoxGeometry(0.5, 2, 0.5);
-        const supportMaterial = new THREE.MeshPhongMaterial({ color: 0x666666 });
+        const supportGeometry = new THREE.BoxGeometry(0.6, 2.5, 0.6);
+        const supportMaterial = new THREE.MeshPhongMaterial({ color: 0x555555 });
         
         const supportPositions = [
-            { x: -14, z: -2.5 },
-            { x: -14, z: 2.5 },
-            { x: 14, z: -2.5 },
-            { x: 14, z: 2.5 }
+            { x: -14, z: -3 },
+            { x: -14, z: 3 },
+            { x: 0, z: -3 },
+            { x: 0, z: 3 },
+            { x: 14, z: -3 },
+            { x: 14, z: 3 }
         ];
         
         supportPositions.forEach(pos => {
             const support = new THREE.Mesh(supportGeometry, supportMaterial);
-            support.position.set(pos.x, -1.5, pos.z);
+            support.position.set(pos.x, -2, pos.z);
             support.castShadow = true;
             support.receiveShadow = true;
             scene.add(support);
@@ -100,93 +146,121 @@
     }
     
     function createManipulators() {
-        const manipulatorPositions = [-6, 0, 6];
+        // 机械手位置：离传送带更远（z轴方向）
+        const manipulatorPositions = [
+            { x: -6, z: -5 },
+            { x: 0, z: -5 },
+            { x: 6, z: -5 }
+        ];
         
-        manipulatorPositions.forEach((posX, index) => {
-            const manipulator = createManipulator(index);
-            manipulator.position.x = posX;
+        manipulatorPositions.forEach((pos, index) => {
+            const manipulator = createTwoClawManipulator(index);
+            manipulator.position.set(pos.x, 0, pos.z);
             manipulators.push(manipulator);
             scene.add(manipulator);
             
             // 存储组件引用
             manipulatorComponents.push({
-                base: manipulator.children[0],
-                arm: manipulator.children[1],
-                forearm: manipulator.children[2],
+                mainArm: manipulator.children[0],
+                forearm: manipulator.children[1],
+                wrist: manipulator.children[2],
                 gripper: manipulator.children[3],
-                baseHeight: 3,
-                armLength: 4,
-                forearmLength: 3,
                 isProcessing: false,
-                processTime: 0
+                processTime: 0,
+                originalPosition: { x: pos.x, z: pos.z }
             });
         });
     }
     
-    function createManipulator(index) {
+    function createTwoClawManipulator(index) {
         const manipulator = new THREE.Group();
         
-        // 底座
-        const baseGeometry = new THREE.CylinderGeometry(0.8, 1, 3, 16);
-        const baseMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0x4444aa,
-            shininess: 100
-        });
-        const base = new THREE.Mesh(baseGeometry, baseMaterial);
-        base.position.y = 1.5;
-        base.castShadow = true;
-        base.receiveShadow = true;
-        manipulator.add(base);
+        // 颜色方案
+        const armColor = 0x3d5a80;    // 深蓝色
+        const jointColor = 0x293241;  // 更深的蓝色
+        const gripperColor = 0x98c1d9; // 浅蓝色
         
-        // 大臂
-        const armGeometry = new THREE.BoxGeometry(0.6, 4, 0.6);
+        // 主臂（竖直向上的支架）
+        const mainArmGeometry = new THREE.BoxGeometry(0.8, 6, 0.8);
         const armMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0x5555bb,
+            color: armColor,
             shininess: 100
         });
-        const arm = new THREE.Mesh(armGeometry, armMaterial);
-        arm.position.y = 3.5;
-        arm.castShadow = true;
-        arm.receiveShadow = true;
-        manipulator.add(arm);
+        const mainArm = new THREE.Mesh(mainArmGeometry, armMaterial);
+        mainArm.position.y = 3;
+        mainArm.castShadow = true;
+        mainArm.receiveShadow = true;
+        manipulator.add(mainArm);
         
-        // 小臂
-        const forearmGeometry = new THREE.BoxGeometry(0.5, 3, 0.5);
+        // 大臂（水平向前伸出）
+        const forearmGeometry = new THREE.BoxGeometry(5, 0.6, 0.6);
         const forearmMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0x6666cc,
+            color: jointColor,
             shininess: 100
         });
         const forearm = new THREE.Mesh(forearmGeometry, forearmMaterial);
-        forearm.position.y = 6;
+        forearm.position.set(0, 6, 2.5);
+        forearm.rotation.x = -0.2;
         forearm.castShadow = true;
         forearm.receiveShadow = true;
         manipulator.add(forearm);
         
-        // 夹爪
+        // 手腕关节
+        const wristGeometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+        const wristMaterial = new THREE.MeshPhongMaterial({ 
+            color: jointColor,
+            shininess: 100
+        });
+        const wrist = new THREE.Mesh(wristGeometry, wristMaterial);
+        wrist.position.set(0, 4.5, 4.8);
+        wrist.castShadow = true;
+        wrist.receiveShadow = true;
+        manipulator.add(wrist);
+        
+        // 夹爪组件（两个钳子）
         const gripperGroup = new THREE.Group();
         
-        // 夹爪主体
-        const gripperBaseGeometry = new THREE.BoxGeometry(1.5, 0.3, 0.5);
+        // 夹爪连接座
+        const gripperBaseGeometry = new THREE.BoxGeometry(1.2, 0.5, 0.8);
         const gripperMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0x8888dd,
-            shininess: 100
+            color: gripperColor,
+            shininess: 80
         });
         const gripperBase = new THREE.Mesh(gripperBaseGeometry, gripperMaterial);
         gripperBase.position.y = 0;
         gripperGroup.add(gripperBase);
         
-        // 左夹爪
-        const leftFingerGeometry = new THREE.BoxGeometry(0.2, 1.5, 0.4);
-        const leftFinger = new THREE.Mesh(leftFingerGeometry, gripperMaterial);
-        leftFinger.position.set(-0.5, -0.9, 0);
-        gripperGroup.add(leftFinger);
+        // 左钳子
+        const leftClawGeometry = new THREE.BoxGeometry(0.15, 1.8, 0.6);
+        const clawMaterial = new THREE.MeshPhongMaterial({ 
+            color: gripperColor,
+            shininess: 100
+        });
+        const leftClaw = new THREE.Mesh(leftClawGeometry, clawMaterial);
+        leftClaw.position.set(-0.45, -1, 0);
+        leftClaw.castShadow = true;
+        gripperGroup.add(leftClaw);
         
-        // 右夹爪
-        const rightFinger = new THREE.Mesh(leftFingerGeometry, gripperMaterial);
-        rightFinger.position.set(0.5, -0.9, 0);
-        gripperGroup.add(rightFinger);
+        // 右钳子
+        const rightClaw = new THREE.Mesh(leftClawGeometry, clawMaterial);
+        rightClaw.position.set(0.45, -1, 0);
+        rightClaw.castShadow = true;
+        gripperGroup.add(rightClaw);
         
-        gripperGroup.position.y = 7.5;
+        // 夹爪尖端（增加细节）
+        const tipGeometry = new THREE.BoxGeometry(0.25, 0.3, 0.7);
+        const leftTip = new THREE.Mesh(tipGeometry, clawMaterial);
+        leftTip.position.set(-0.45, -1.85, 0);
+        leftTip.castShadow = true;
+        gripperGroup.add(leftTip);
+        
+        const rightTip = new THREE.Mesh(tipGeometry, clawMaterial);
+        rightTip.position.set(0.45, -1.85, 0);
+        rightTip.castShadow = true;
+        gripperGroup.add(rightTip);
+        
+        // 设置夹爪初始位置
+        gripperGroup.position.set(0, 3.5, 4.8);
         manipulator.add(gripperGroup);
         
         return manipulator;
@@ -229,8 +303,8 @@
         // 笑脸（初始隐藏）
         createSmile();
         
-        // 身体（初始隐藏）
-        createBody();
+        // 身体（初始隐藏，正方形）
+        createSquareBody();
         
         // 设置初始位置
         part.position.set(partPosition.x, partPosition.y, partPosition.z);
@@ -307,16 +381,16 @@
         partSmile.visible = false;
     }
     
-    function createBody() {
-        // 身体（一个更大的三角形或矩形连接到底部）
-        const bodyGeometry = new THREE.BoxGeometry(1.6, 0.8, 0.5);
+    function createSquareBody() {
+        // 更大的正方形身体
+        const bodyGeometry = new THREE.BoxGeometry(2.2, 2.2, 0.4);
         const bodyMaterial = new THREE.MeshPhongMaterial({ 
             color: 0xffaa00,
-            shininess: 50
+            shininess: 60
         });
         
         partBody = new THREE.Mesh(bodyGeometry, bodyMaterial);
-        partBody.position.y = -0.9;
+        partBody.position.y = -1.8;
         partBody.castShadow = true;
         partBody.receiveShadow = true;
         part.add(partBody);
@@ -327,18 +401,31 @@
         requestAnimationFrame(animate);
         animationTime += 0.016; // 约60fps
         
+        updateBeltLinks();
         updatePartAnimation();
         updateManipulators();
-        rotateBelt();
         
         renderer.render(scene, camera);
     }
     
-    function rotateBelt() {
-        // 传送带滚动效果（通过材质偏移实现）
-        if (conveyorBelt.material) {
-            // 这里可以添加纹理偏移，但为了简单起见，我们不添加复杂的纹理
-        }
+    function updateBeltLinks() {
+        // 更新链条节位置，模拟滚动效果
+        const beltLength = 32;
+        const linkWidth = 0.8;
+        const gap = 0.2;
+        const speed = 2.5;
+        
+        beltLinks.forEach(linkData => {
+            // 计算新位置
+            let newX = linkData.mesh.position.x + speed * 0.016;
+            
+            // 循环：如果超出右端，重置到左端
+            if (newX > 16) {
+                newX = -16;
+            }
+            
+            linkData.mesh.position.x = newX;
+        });
     }
     
     function updatePartAnimation() {
@@ -368,15 +455,9 @@
                 break;
                 
             case 'BEING_LIFTED':
-                // 机械手抓取零件（位置由机械手动画控制）
-                break;
-                
             case 'BEING_PROCESSED':
-                // 正在加工
-                break;
-                
             case 'BEING_PLACED':
-                // 机械手放回零件
+                // 零件被机械手控制，不在这里更新位置
                 break;
                 
             case 'MOVING_TO_SECOND':
@@ -422,107 +503,69 @@
         manipulatorComponents.forEach((comp, index) => {
             if (comp.isProcessing) {
                 comp.processTime += 0.016;
-                const totalProcessTime = 3; // 总处理时间（秒）
                 
-                // 动画阶段：0-0.5秒下降抓取，0.5-2秒加工，2-2.5秒上升放回
-                const grabTime = 0.5;
-                const processTime = 1.5;
-                const releaseTime = 0.5;
+                // 动画阶段配置
+                const moveToPartTime = 0.8;      // 移动到零件位置
+                const grabTime = 0.4;             // 夹紧
+                const liftTime = 0.3;              // 抬起
+                const processTime = 1.5;           // 加工
+                const lowerTime = 0.3;             // 放下
+                const releaseTime = 0.4;           // 松开
+                const returnTime = 0.8;            // 返回原位
                 
-                if (comp.processTime < grabTime) {
-                    // 下降阶段
-                    const progress = comp.processTime / grabTime;
-                    const moveDown = progress * 5; // 下降距离
-                    
-                    // 调整夹爪位置
-                    const gripper = comp.gripper;
-                    const originalY = 7.5;
-                    gripper.position.y = originalY - moveDown;
-                    
-                    // 当接近零件时，开始夹紧
-                    if (progress > 0.7) {
-                        const closeProgress = (progress - 0.7) / 0.3;
-                        // 左夹爪向右移动，右夹爪向左移动
-                        gripper.children[1].position.x = -0.5 + closeProgress * 0.3;
-                        gripper.children[2].position.x = 0.5 - closeProgress * 0.3;
-                    }
-                    
-                    // 零件跟随夹爪移动（在抓取后）
-                    if (progress > 0.5 && partState === 'BEING_LIFTED') {
-                        // 这里不移动零件，保持在传送带上直到抓取完成
-                    }
-                    
-                } else if (comp.processTime < grabTime + processTime) {
-                    // 加工阶段
-                    const processProgress = (comp.processTime - grabTime) / processTime;
-                    
-                    // 稍微抬起零件
-                    const liftHeight = 2;
-                    const gripper = comp.gripper;
-                    gripper.position.y = 7.5 - 5 + liftHeight * Math.sin(processProgress * Math.PI);
-                    
-                    // 零件跟随夹爪
-                    if (partState === 'BEING_LIFTED') {
+                const totalTime = moveToPartTime + grabTime + liftTime + processTime + lowerTime + releaseTime + returnTime;
+                
+                let elapsed = comp.processTime;
+                
+                // 1. 移动到零件位置
+                if (elapsed < moveToPartTime) {
+                    const progress = elapsed / moveToPartTime;
+                    moveGripperToPart(comp, index, progress);
+                }
+                // 2. 夹紧零件
+                else if (elapsed < moveToPartTime + grabTime) {
+                    const progress = (elapsed - moveToPartTime) / grabTime;
+                    closeGripper(comp, progress);
+                }
+                // 3. 抬起零件
+                else if (elapsed < moveToPartTime + grabTime + liftTime) {
+                    const progress = (elapsed - moveToPartTime - grabTime) / liftTime;
+                    liftPart(comp, index, progress);
+                    if (partState === 'BEING_LIFTED' && progress > 0.5) {
                         partState = 'BEING_PROCESSED';
                     }
-                    
-                    // 更新零件位置跟随夹爪
-                    const manipulatorWorldPos = new THREE.Vector3();
-                    manipulators[index].getWorldPosition(manipulatorWorldPos);
-                    
-                    const gripperWorldPos = new THREE.Vector3();
-                    gripper.getWorldPosition(gripperWorldPos);
-                    
-                    part.position.set(
-                        manipulatorWorldPos.x,
-                        partPosition.y + liftHeight * Math.sin(processProgress * Math.PI),
-                        partPosition.z
-                    );
-                    
-                    // 在加工过程中应用修改
-                    if (processProgress > 0.3) {
+                }
+                // 4. 加工零件
+                else if (elapsed < moveToPartTime + grabTime + liftTime + processTime) {
+                    const progress = (elapsed - moveToPartTime - grabTime - liftTime) / processTime;
+                    processPart(comp, index, progress);
+                    if (progress > 0.3) {
                         applyModification(index);
                     }
-                    
-                } else if (comp.processTime < grabTime + processTime + releaseTime) {
-                    // 放回阶段
-                    const releaseProgress = (comp.processTime - grabTime - processTime) / releaseTime;
-                    
-                    const gripper = comp.gripper;
-                    const currentY = gripper.position.y;
-                    const targetY = 7.5;
-                    
-                    // 上升回原位
-                    gripper.position.y = currentY + (targetY - currentY) * releaseProgress;
-                    
-                    // 零件跟随下降
-                    if (partState === 'BEING_PROCESSED') {
+                }
+                // 5. 放下零件
+                else if (elapsed < moveToPartTime + grabTime + liftTime + processTime + lowerTime) {
+                    const progress = (elapsed - moveToPartTime - grabTime - liftTime - processTime) / lowerTime;
+                    lowerPart(comp, index, progress);
+                    if (partState === 'BEING_PROCESSED' && progress > 0.5) {
                         partState = 'BEING_PLACED';
                     }
-                    
-                    const manipulatorWorldPos = new THREE.Vector3();
-                    manipulators[index].getWorldPosition(manipulatorWorldPos);
-                    
-                    part.position.set(
-                        manipulatorWorldPos.x,
-                        partPosition.y + (1 - releaseProgress) * 2,
-                        partPosition.z
-                    );
-                    
-                    // 松开夹爪
-                    if (releaseProgress > 0.5) {
-                        const openProgress = (releaseProgress - 0.5) / 0.5;
-                        gripper.children[1].position.x = -0.2 - openProgress * 0.3;
-                        gripper.children[2].position.x = 0.2 + openProgress * 0.3;
-                    }
-                    
-                } else {
-                    // 加工完成
+                }
+                // 6. 松开夹爪
+                else if (elapsed < moveToPartTime + grabTime + liftTime + processTime + lowerTime + releaseTime) {
+                    const progress = (elapsed - moveToPartTime - grabTime - liftTime - processTime - lowerTime) / releaseTime;
+                    openGripper(comp, progress);
+                }
+                // 7. 返回原位
+                else if (elapsed < totalTime) {
+                    const progress = (elapsed - moveToPartTime - grabTime - liftTime - processTime - lowerTime - releaseTime) / returnTime;
+                    moveGripperBack(comp, index, progress);
+                }
+                // 完成
+                else {
                     comp.isProcessing = false;
-                    
                     // 确保零件回到传送带
                     part.position.set(partPosition.x, partPosition.y, partPosition.z);
-                    
                     // 更新状态
                     if (index === 0) {
                         partState = 'MOVING_TO_SECOND';
@@ -534,6 +577,130 @@
                 }
             }
         });
+    }
+    
+    function moveGripperToPart(comp, index, progress) {
+        const gripper = comp.gripper;
+        
+        // 从初始位置移动到传送带上方的零件位置
+        const startX = 0;
+        const startY = 3.5;
+        const startZ = 4.8;
+        
+        // 目标位置：零件上方
+        const targetX = 0;
+        const targetY = 1.5;
+        const targetZ = 9.8;  // 向前移动到传送带位置
+        
+        // 使用平滑移动
+        const easeProgress = easeInOutQuad(progress);
+        
+        gripper.position.x = startX + (targetX - startX) * easeProgress;
+        gripper.position.y = startY + (targetY - startY) * easeProgress;
+        gripper.position.z = startZ + (targetZ - startZ) * easeProgress;
+    }
+    
+    function closeGripper(comp, progress) {
+        const gripper = comp.gripper;
+        const easeProgress = easeInOutQuad(progress);
+        
+        // 左钳子向右移动
+        gripper.children[1].position.x = -0.45 + easeProgress * 0.3;
+        // 右钳子向左移动
+        gripper.children[2].position.x = 0.45 - easeProgress * 0.3;
+        // 尖端也跟随移动
+        gripper.children[3].position.x = -0.45 + easeProgress * 0.3;
+        gripper.children[4].position.x = 0.45 - easeProgress * 0.3;
+    }
+    
+    function liftPart(comp, index, progress) {
+        const gripper = comp.gripper;
+        const easeProgress = easeInOutQuad(progress);
+        
+        // 向上移动
+        gripper.position.y = 1.5 - easeProgress * 2;
+        
+        // 零件跟随夹爪移动
+        const manipulatorWorldPos = new THREE.Vector3();
+        manipulators[index].getWorldPosition(manipulatorWorldPos);
+        
+        part.position.set(
+            manipulatorWorldPos.x,
+            partPosition.y + (1 - easeProgress) * 2,
+            partPosition.z
+        );
+    }
+    
+    function processPart(comp, index, progress) {
+        const gripper = comp.gripper;
+        const easeProgress = easeInOutQuad(progress);
+        
+        // 轻微晃动模拟加工
+        gripper.position.y = 1.5 + Math.sin(progress * Math.PI * 4) * 0.1;
+        
+        // 零件跟随
+        const manipulatorWorldPos = new THREE.Vector3();
+        manipulators[index].getWorldPosition(manipulatorWorldPos);
+        
+        part.position.set(
+            manipulatorWorldPos.x,
+            partPosition.y + Math.sin(progress * Math.PI * 4) * 0.1,
+            partPosition.z
+        );
+    }
+    
+    function lowerPart(comp, index, progress) {
+        const gripper = comp.gripper;
+        const easeProgress = easeInOutQuad(progress);
+        
+        // 向下移动回到传送带
+        gripper.position.y = 1.5 + easeProgress * 0;
+        
+        // 零件跟随
+        const manipulatorWorldPos = new THREE.Vector3();
+        manipulators[index].getWorldPosition(manipulatorWorldPos);
+        
+        part.position.set(
+            manipulatorWorldPos.x,
+            partPosition.y + easeProgress * 0,
+            partPosition.z
+        );
+    }
+    
+    function openGripper(comp, progress) {
+        const gripper = comp.gripper;
+        const easeProgress = easeInOutQuad(progress);
+        
+        // 左钳子向左移动
+        gripper.children[1].position.x = -0.15 - easeProgress * 0.3;
+        // 右钳子向右移动
+        gripper.children[2].position.x = 0.15 + easeProgress * 0.3;
+        // 尖端也跟随移动
+        gripper.children[3].position.x = -0.15 - easeProgress * 0.3;
+        gripper.children[4].position.x = 0.15 + easeProgress * 0.3;
+    }
+    
+    function moveGripperBack(comp, index, progress) {
+        const gripper = comp.gripper;
+        
+        const startX = 0;
+        const startY = 1.5;
+        const startZ = 9.8;
+        
+        const targetX = 0;
+        const targetY = 3.5;
+        const targetZ = 4.8;
+        
+        const easeProgress = easeInOutQuad(progress);
+        
+        gripper.position.x = startX + (targetX - startX) * easeProgress;
+        gripper.position.y = startY + (targetY - startY) * easeProgress;
+        gripper.position.z = startZ + (targetZ - startZ) * easeProgress;
+    }
+    
+    // 缓动函数
+    function easeInOutQuad(t) {
+        return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
     }
     
     function applyModification(manipulatorIndex) {
@@ -556,7 +723,7 @@
                 break;
                 
             case 2:
-                // 第三个机械手：添加身体
+                // 第三个机械手：添加正方形身体（更大）
                 if (!hasBody) {
                     hasBody = true;
                     partBody.visible = true;
